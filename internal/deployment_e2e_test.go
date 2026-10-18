@@ -634,7 +634,7 @@ esac
 func TestNixFlakeAndGitHubActionWorkflow(t *testing.T) {
 	root := repoRoot(t)
 
-	// 1. Validate flake.nix chained derivations (seaweedfs-ui -> docker-image -> helm-chart)
+	// 1. Validate flake.nix chained derivations (seaweedfs-ui -> docker-image-amd64 & docker-image-arm64 -> helm-chart)
 	flakePath := filepath.Join(root, "flake.nix")
 	flakeBytes, err := os.ReadFile(flakePath)
 	if err != nil {
@@ -646,11 +646,12 @@ func TestNixFlakeAndGitHubActionWorkflow(t *testing.T) {
 		"buildGoModule",
 		`pname = "seaweedfs-ui"`,
 		"dockerTools.buildLayeredImage",
-		"seaweedfs-ui-linux",
+		"seaweedfs-ui-linux-amd64",
+		"seaweedfs-ui-linux-arm64",
+		"docker-image-amd64",
+		"docker-image-arm64",
 		`pname = "seaweedfs-ui-helm-chart"`,
-		"buildInputs = [ seaweedfs-ui docker-image ]",
 		"helm package",
-		"inherit seaweedfs-ui docker-image helm-chart;",
 	} {
 		if !strings.Contains(flakeStr, req) {
 			t.Errorf("flake.nix missing required derivation definition %q", req)
@@ -674,8 +675,9 @@ func TestNixFlakeAndGitHubActionWorkflow(t *testing.T) {
 		"DeterminateSystems/magic-nix-cache-action",
 		"cachix/cachix-action",
 		"nix build .#seaweedfs-ui",
-		"nix build .#docker-image",
-		"docker push",
+		"nix build .#docker-image-amd64",
+		"nix build .#docker-image-arm64",
+		"docker buildx imagetools create",
 		"nix build .#helm-chart",
 		"oci://",
 	} {
@@ -684,12 +686,13 @@ func TestNixFlakeAndGitHubActionWorkflow(t *testing.T) {
 		}
 	}
 
-	// Ensure strict ordering in workflow: .#seaweedfs-ui -> .#docker-image -> .#helm-chart
+	// Ensure strict ordering in workflow: .#seaweedfs-ui -> .#docker-image-* -> .#helm-chart
 	idxExec := strings.Index(wfStr, "nix build .#seaweedfs-ui")
-	idxImg := strings.Index(wfStr, "nix build .#docker-image")
+	idxImgAmd64 := strings.Index(wfStr, "nix build .#docker-image-amd64")
+	idxImgArm64 := strings.Index(wfStr, "nix build .#docker-image-arm64")
 	idxChart := strings.Index(wfStr, "nix build .#helm-chart")
-	if !(idxExec >= 0 && idxImg > idxExec && idxChart > idxImg) {
-		t.Errorf("expected sequential ordering (.#seaweedfs-ui -> .#docker-image -> .#helm-chart) in workflow, got indices %d, %d, %d", idxExec, idxImg, idxChart)
+	if !(idxExec >= 0 && idxImgAmd64 > idxExec && idxImgArm64 > idxExec && idxChart > idxImgAmd64 && idxChart > idxImgArm64) {
+		t.Errorf("expected sequential ordering (.#seaweedfs-ui -> .#docker-image-amd64/arm64 -> .#helm-chart) in workflow")
 	}
 }
 

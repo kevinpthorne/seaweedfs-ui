@@ -1,8 +1,8 @@
 {
-  description = "SeaweedFS In-Cluster Admin Web UI — Executable, Container Image, and Helm Chart";
+  description = "SeaweedFS In-Cluster Admin Web UI — Multi-Arch Executable, Container Images (amd64/arm64), and Helm Chart";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -15,47 +15,37 @@
         version = "0.1.0";
         gitCommit = self.shortRev or self.dirtyShortRev or "dev";
 
-        # For container images built on macOS (darwin), target the corresponding Linux system
-        linuxSystem =
-          if system == "aarch64-darwin" then "aarch64-linux"
-          else if system == "x86_64-darwin" then "x86_64-linux"
-          else system;
-        linuxPkgs = import nixpkgs { system = linuxSystem; };
+        cleanedSrc = lib.cleanSourceWith {
+          src = ./.;
+          filter = path: type:
+            let
+              relPath = lib.removePrefix (toString ./. + "/") (toString path);
+            in
+            !(lib.hasPrefix ".agents" relPath) &&
+            !(lib.hasPrefix ".git" relPath) &&
+            !(lib.hasPrefix "result" relPath);
+        };
 
-        mkSeaweedfsUI = goPkgs: goPkgs.buildGoModule {
+        commonLdflags = [
+          "-s"
+          "-w"
+          "-X main.Version=${version}"
+          "-X main.GitCommit=${gitCommit}"
+          "-X main.BuildDate=1970-01-01T00:00:00Z"
+        ];
+
+        # 1a. Native executable (runs unit test suite during checkPhase)
+        seaweedfs-ui = pkgs.buildGoModule {
           pname = "seaweedfs-ui";
           inherit version;
-
-          src = lib.cleanSourceWith {
-            src = ./.;
-            filter = path: type:
-              let
-                relPath = lib.removePrefix (toString ./. + "/") (toString path);
-              in
-              !(lib.hasPrefix ".agents" relPath) &&
-              !(lib.hasPrefix ".git" relPath) &&
-              !(lib.hasPrefix "result" relPath);
-          };
-
+          src = cleanedSrc;
           vendorHash = null;
-
           subPackages = [ "cmd/seaweedfs-ui" ];
-
           env = {
-            CGO_ENABLED = "0";
+            CGO_ENABLED = 0;
           };
-
-          ldflags = [
-            "-s"
-            "-w"
-            "-X main.Version=${version}"
-            "-X main.GitCommit=${gitCommit}"
-            "-X main.BuildDate=1970-01-01T00:00:00Z"
-          ];
-
-          # Run unit tests that don't require external helm binary during Go module build
+          ldflags = commonLdflags;
           doCheck = true;
-          checkFlags = [ "-skip=TestHelmChartConfigurations" ];
 
           postInstall = ''
             mkdir -p $out/usr/local/bin
@@ -69,69 +59,111 @@
           };
         };
 
-        # 1. Derivation 1: The compiled seaweedfs-ui executable
-        seaweedfs-ui = mkSeaweedfsUI pkgs;
+        # 1b. Cross/target Linux static Go executable builder for amd64 & arm64
+        mkLinuxExecutable = goArch: pkgs.buildGoModule {
+          pname = "seaweedfs-ui-linux-${goArch}";
+          inherit version;
+          src = cleanedSrc;
+          vendorHash = null;
+          subPackages = [ "cmd/seaweedfs-ui" ];
+          env = {
+            CGO_ENABLED = 0;
+            GOOS = "linux";
+            GOARCH = goArch;
+          };
+          ldflags = commonLdflags;
+          # Unit tests already run in the native `seaweedfs-ui` derivation
+          doCheck = false;
 
-        # Linux executable used inside the OCI/Docker image
-        seaweedfs-ui-linux =
-          if pkgs.stdenv.isLinux then seaweedfs-ui
-          else (mkSeaweedfsUI linuxPkgs);
-
-        # Runtime filesystem layout with non-root permissions and binary paths matching SPEC.md
-        containerRoot = pkgs.runCommand "seaweedfs-ui-container-root" { } ''
-          mkdir -p $out/usr/local/bin $out/usr/bin $out/etc/seaweedfs-ui $out/tmp/seaweedfs/.seaweedfs
-          ln -s ${seaweedfs-ui-linux}/bin/seaweedfs-ui $out/usr/local/bin/seaweedfs-ui
-          ln -s ${linuxPkgs.seaweedfs}/bin/weed $out/usr/local/bin/weed
-          ln -s ${linuxPkgs.seaweedfs}/bin/weed $out/usr/bin/weed
-        '';
-
-        # 2. Derivation 2: The OCI/Docker container image (chained from seaweedfs-ui executable)
-        docker-image = pkgs.dockerTools.buildLayeredImage {
-          name = "ghcr.io/kevinpthorne/seaweedfs-ui";
-          tag = version;
-          created = "1970-01-01T00:00:01Z";
-          architecture = linuxPkgs.go.GOARCH;
-
-          contents = [
-            linuxPkgs.cacert
-            linuxPkgs.tzdata
-            seaweedfs-ui-linux
-            linuxPkgs.seaweedfs
-            containerRoot
-          ];
-
-          extraCommands = ''
-            mkdir -p tmp/seaweedfs/.seaweedfs etc/seaweedfs-ui
-            chmod 1777 tmp tmp/seaweedfs tmp/seaweedfs/.seaweedfs
+          postInstall = ''
+            # When cross-compiling, `go install` outputs to $out/bin/linux_${goArch}/seaweedfs-ui
+            if [ -f "$out/bin/linux_${goArch}/seaweedfs-ui" ]; then
+              mv "$out/bin/linux_${goArch}/seaweedfs-ui" "$out/bin/seaweedfs-ui"
+              rmdir "$out/bin/linux_${goArch}"
+            fi
+            mkdir -p $out/usr/local/bin
+            ln -s $out/bin/seaweedfs-ui $out/usr/local/bin/seaweedfs-ui
           '';
-
-          config = {
-            User = "65532:65532";
-            Env = [
-              "HOME=/tmp/seaweedfs"
-              "WEED_BINARY_PATH=/usr/local/bin/weed"
-              "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
-              "PATH=/usr/local/bin:/usr/bin:/bin"
-            ];
-            ExposedPorts = {
-              "8080/tcp" = { };
-            };
-            Entrypoint = [ "/usr/local/bin/seaweedfs-ui" ];
-            Cmd = [ "-config" "/etc/seaweedfs-ui/config.yaml" ];
-            Labels = {
-              "org.opencontainers.image.title" = "seaweedfs-ui";
-              "org.opencontainers.image.version" = version;
-              "org.opencontainers.image.revision" = gitCommit;
-            };
-          };
-
-          passthru = {
-            inherit version;
-            executable = seaweedfs-ui;
-          };
         };
 
-        # 3. Derivation 3: The packaged Helm chart (chained from executable + docker-image)
+        seaweedfs-ui-linux-amd64 = mkLinuxExecutable "amd64";
+        seaweedfs-ui-linux-arm64 = mkLinuxExecutable "arm64";
+
+        # 2. Multi-arch OCI/Docker layered image builder (amd64 and arm64)
+        mkDockerImage = { goArch, nixSystem, appBin }:
+          let
+            targetLinuxPkgs = import nixpkgs { system = nixSystem; };
+            containerRoot = pkgs.runCommand "seaweedfs-ui-container-root-${goArch}" { } ''
+              mkdir -p $out/usr/local/bin $out/usr/bin $out/etc/seaweedfs-ui $out/tmp/seaweedfs/.seaweedfs
+              ln -s ${appBin}/bin/seaweedfs-ui $out/usr/local/bin/seaweedfs-ui
+              ln -s ${targetLinuxPkgs.seaweedfs}/bin/weed $out/usr/local/bin/weed
+              ln -s ${targetLinuxPkgs.seaweedfs}/bin/weed $out/usr/bin/weed
+            '';
+          in
+          pkgs.dockerTools.buildLayeredImage {
+            name = "ghcr.io/seaweedfs-ui/seaweedfs-ui";
+            tag = "${version}-${goArch}";
+            created = "1970-01-01T00:00:01Z";
+            architecture = goArch;
+
+            contents = [
+              targetLinuxPkgs.cacert
+              targetLinuxPkgs.tzdata
+              appBin
+              targetLinuxPkgs.seaweedfs
+              containerRoot
+            ];
+
+            extraCommands = ''
+              mkdir -p tmp/seaweedfs/.seaweedfs etc/seaweedfs-ui
+              chmod 1777 tmp tmp/seaweedfs tmp/seaweedfs/.seaweedfs
+            '';
+
+            config = {
+              User = "65532:65532";
+              Env = [
+                "HOME=/tmp/seaweedfs"
+                "WEED_BINARY_PATH=/usr/local/bin/weed"
+                "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+                "PATH=/usr/local/bin:/usr/bin:/bin"
+              ];
+              ExposedPorts = {
+                "8080/tcp" = { };
+              };
+              Entrypoint = [ "/usr/local/bin/seaweedfs-ui" ];
+              Cmd = [ "-config" "/etc/seaweedfs-ui/config.yaml" ];
+              Labels = {
+                "org.opencontainers.image.title" = "seaweedfs-ui";
+                "org.opencontainers.image.version" = version;
+                "org.opencontainers.image.revision" = gitCommit;
+                "org.opencontainers.image.architecture" = goArch;
+              };
+            };
+
+            passthru = {
+              inherit version goArch;
+              executable = appBin;
+            };
+          };
+
+        docker-image-amd64 = mkDockerImage {
+          goArch = "amd64";
+          nixSystem = "x86_64-linux";
+          appBin = seaweedfs-ui-linux-amd64;
+        };
+
+        docker-image-arm64 = mkDockerImage {
+          goArch = "arm64";
+          nixSystem = "aarch64-linux";
+          appBin = seaweedfs-ui-linux-arm64;
+        };
+
+        docker-image =
+          if system == "aarch64-linux" || system == "aarch64-darwin"
+          then docker-image-arm64
+          else docker-image-amd64;
+
+        # 3. Derivation 3: The packaged Helm chart (chained from executable + both amd64 & arm64 images)
         helm-chart = pkgs.stdenvNoCC.mkDerivation {
           pname = "seaweedfs-ui-helm-chart";
           inherit version;
@@ -140,9 +172,12 @@
 
           nativeBuildInputs = [ pkgs.kubernetes-helm ];
 
-          # Explicitly chain the executable and docker-image derivations so Nix builds
-          # and verifies them before packaging the Helm chart.
-          buildInputs = [ seaweedfs-ui docker-image ];
+          # Explicitly chain the executable and both multi-arch docker-image derivations
+          buildInputs = [
+            seaweedfs-ui
+            docker-image-amd64
+            docker-image-arm64
+          ];
 
           dontConfigure = true;
 
@@ -150,7 +185,8 @@
             runHook preBuild
 
             echo "Verified upstream executable: ${seaweedfs-ui}/bin/seaweedfs-ui"
-            echo "Verified upstream container image archive: ${docker-image}"
+            echo "Verified upstream linux/amd64 image archive: ${docker-image-amd64}"
+            echo "Verified upstream linux/arm64 image archive: ${docker-image-arm64}"
 
             mkdir -p build/seaweedfs-ui
             cp -R ./* build/seaweedfs-ui/
@@ -194,7 +230,8 @@
               "version": "${version}",
               "gitCommit": "${gitCommit}",
               "executable": "${seaweedfs-ui}",
-              "dockerImage": "${docker-image}",
+              "dockerImageAmd64": "${docker-image-amd64}",
+              "dockerImageArm64": "${docker-image-arm64}",
               "chartArchive": "seaweedfs-ui-${version}.tgz"
             }
             EOF
@@ -206,7 +243,14 @@
       {
         packages = {
           default = seaweedfs-ui;
-          inherit seaweedfs-ui docker-image helm-chart;
+          inherit
+            seaweedfs-ui
+            seaweedfs-ui-linux-amd64
+            seaweedfs-ui-linux-arm64
+            docker-image
+            docker-image-amd64
+            docker-image-arm64
+            helm-chart;
         };
 
         devShells.default = pkgs.mkShell {

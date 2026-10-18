@@ -1,4 +1,4 @@
-name: Build & Publish (Nix Executable -> Docker Image -> Helm Chart)
+name: Build & Publish (Nix Executable -> Multi-Arch Docker Images -> Helm Chart)
 
 on:
   push:
@@ -22,7 +22,7 @@ env:
 
 jobs:
   nix-build-and-publish:
-    name: Nix Build & Publish Pipeline
+    name: Nix Multi-Arch Build & Publish Pipeline
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -60,27 +60,29 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       # ========================================================================
-      # 1. Nix Derivation 1: Build & Test the Go Executable (seaweedfs-ui)
+      # 1. Nix Derivation 1: Build & Test Executables (native + amd64 + arm64)
       # ========================================================================
-      - name: "1. Build Executable via Nix (.#seaweedfs-ui)"
+      - name: "1. Build Executables via Nix (.#seaweedfs-ui, amd64, arm64)"
         run: |
           nix build .#seaweedfs-ui --print-build-logs --out-link result-bin
           ./result-bin/bin/seaweedfs-ui --version
+          nix build .#seaweedfs-ui-linux-amd64 --print-build-logs --out-link result-bin-amd64
+          nix build .#seaweedfs-ui-linux-arm64 --print-build-logs --out-link result-bin-arm64
 
       # ========================================================================
-      # 2. Nix Derivation 2: Build the Docker/OCI Image (.#docker-image)
+      # 2. Nix Derivation 2: Build Multi-Arch Container Images (amd64 & arm64)
       # ========================================================================
-      - name: "2. Build Container Image via Nix (.#docker-image)"
+      - name: "2. Build Multi-Arch Container Images via Nix (.#docker-image-amd64 & .#docker-image-arm64)"
         run: |
-          nix build .#docker-image --print-build-logs --out-link result-image
-          ls -lh result-image
+          nix build .#docker-image-amd64 --print-build-logs --out-link result-image-amd64
+          nix build .#docker-image-arm64 --print-build-logs --out-link result-image-arm64
+          ls -lh result-image-amd64 result-image-arm64
 
-      - name: Load and Verify Nix Container Image in Docker
+      - name: Smoke Test Native (amd64) Container Image in Docker
         run: |
-          LOADED_OUT=$(docker load < result-image)
+          LOADED_OUT=$(docker load < result-image-amd64)
           echo "$LOADED_OUT"
           LOADED_IMAGE=$(echo "$LOADED_OUT" | sed -n 's/^Loaded image: //p' | tail -n1)
-          echo "LOADED_IMAGE=${LOADED_IMAGE}" >> "$GITHUB_ENV"
           docker run --rm "${LOADED_IMAGE}" --version
 
       - name: Log in to GitHub Container Registry (GHCR)
@@ -91,18 +93,36 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Tag and Push Docker Image to GHCR
+      - name: Push amd64 & arm64 Images and Create Multi-Arch Manifests on GHCR
         if: github.event_name != 'pull_request'
         run: |
           TARGET_IMAGE="${{ env.REGISTRY }}/${{ steps.meta.outputs.image_repo }}"
-          docker tag "${LOADED_IMAGE}" "${TARGET_IMAGE}:${{ steps.meta.outputs.version }}"
-          docker tag "${LOADED_IMAGE}" "${TARGET_IMAGE}:sha-${{ steps.meta.outputs.short_sha }}"
-          docker push "${TARGET_IMAGE}:${{ steps.meta.outputs.version }}"
-          docker push "${TARGET_IMAGE}:sha-${{ steps.meta.outputs.short_sha }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+          SHORT_SHA="${{ steps.meta.outputs.short_sha }}"
+
+          # Push per-architecture archives directly to GHCR via skopeo
+          nix run nixpkgs#skopeo -- copy --insecure-policy \
+            --dest-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+            docker-archive:result-image-amd64 \
+            "docker://${TARGET_IMAGE}:${VERSION}-amd64"
+
+          nix run nixpkgs#skopeo -- copy --insecure-policy \
+            --dest-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+            docker-archive:result-image-arm64 \
+            "docker://${TARGET_IMAGE}:${VERSION}-arm64"
+
+          # Create and push multi-arch manifest lists (linux/amd64 + linux/arm64)
+          docker buildx imagetools create \
+            -t "${TARGET_IMAGE}:${VERSION}" \
+            -t "${TARGET_IMAGE}:sha-${SHORT_SHA}" \
+            "${TARGET_IMAGE}:${VERSION}-amd64" \
+            "${TARGET_IMAGE}:${VERSION}-arm64"
 
           if [[ "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/master" || "${{ github.ref }}" == refs/tags/v* ]]; then
-            docker tag "${LOADED_IMAGE}" "${TARGET_IMAGE}:latest"
-            docker push "${TARGET_IMAGE}:latest"
+            docker buildx imagetools create \
+              -t "${TARGET_IMAGE}:latest" \
+              "${TARGET_IMAGE}:${VERSION}-amd64" \
+              "${TARGET_IMAGE}:${VERSION}-arm64"
           fi
 
       # ========================================================================

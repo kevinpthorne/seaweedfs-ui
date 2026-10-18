@@ -116,9 +116,9 @@ The repository provides a hermetic `flake.nix` with three chained derivations (`
 nix build .#seaweedfs-ui
 ./result/bin/seaweedfs-ui --version
 
-# 2. Build the hardened OCI/Docker image (bundles seaweedfs-ui + weed CLI)
-nix build .#docker-image
-docker load < result
+# 2. Build the hardened multi-arch OCI/Docker images (linux/amd64 and linux/arm64)
+nix build .#docker-image-amd64 --out-link result-image-amd64
+nix build .#docker-image-arm64 --out-link result-image-arm64
 
 # 3. Lint, template-verify, and package the Helm chart (.tgz)
 nix build .#helm-chart
