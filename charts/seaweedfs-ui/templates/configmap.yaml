@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "seaweedfs-ui.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "seaweedfs-ui.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    listenAddr: {{ .Values.config.listenAddr | quote }}
+    allowAdminActions: {{ .Values.config.allowAdminActions }}
+    enableRawShell: {{ .Values.config.enableRawShell }}
+    queryTimeout: {{ .Values.config.queryTimeout | quote }}
+    actionTimeout: {{ .Values.config.actionTimeout | quote }}
+    weedBinaryPath: {{ .Values.config.weedBinaryPath | quote }}
+    tls:
+      enabled: {{ .Values.config.tls.enabled }}
+      insecureSkipVerify: {{ .Values.config.tls.insecureSkipVerify }}
+      caFile: {{ printf "/etc/seaweedfs-ui/tls/%s" (default "ca.crt" .Values.config.tls.caKey) | quote }}
+      certFile: {{ printf "/etc/seaweedfs-ui/tls/%s" (default "tls.crt" .Values.config.tls.certKey) | quote }}
+      keyFile: {{ printf "/etc/seaweedfs-ui/tls/%s" (default "tls.key" .Values.config.tls.keyKey) | quote }}
+      securityTomlPath: {{ default "/tmp/seaweedfs/security.toml" .Values.config.tls.securityTomlPath | quote }}
+    discovery:
+      kubernetes:
+        enabled: {{ .Values.config.discovery.kubernetes.enabled }}
+        clusterWide: {{ .Values.rbac.clusterWide }}
+        {{- if .Values.config.discovery.kubernetes.namespaces }}
+        namespaces:
+          {{- toYaml .Values.config.discovery.kubernetes.namespaces | nindent 10 }}
+        {{- else if not .Values.rbac.clusterWide }}
+        namespaces:
+          - {{ .Release.Namespace | quote }}
+        {{- else }}
+        namespaces: []
+        {{- end }}
+        refreshInterval: {{ .Values.config.discovery.kubernetes.refreshInterval | quote }}
+        serviceSelector: {{ .Values.config.discovery.kubernetes.serviceSelector | quote }}
+        filerSyncPodSelector: {{ .Values.config.discovery.kubernetes.filerSyncPodSelector | quote }}
+    {{- if .Values.config.clusters }}
+    clusters:
+      {{- toYaml .Values.config.clusters | nindent 6 }}
+    {{- else }}
+    clusters: []
+    {{- end }}

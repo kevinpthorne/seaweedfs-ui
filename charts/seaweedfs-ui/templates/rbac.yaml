@@ -1,0 +1,57 @@
+{{- if and .Values.rbac.create .Values.config.discovery.kubernetes.enabled -}}
+{{- if .Values.rbac.clusterWide -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "seaweedfs-ui.fullname" . }}
+  labels:
+    {{- include "seaweedfs-ui.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services", "endpoints", "pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "seaweedfs-ui.fullname" . }}
+  labels:
+    {{- include "seaweedfs-ui.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "seaweedfs-ui.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "seaweedfs-ui.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- else -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "seaweedfs-ui.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "seaweedfs-ui.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services", "endpoints", "pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "seaweedfs-ui.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "seaweedfs-ui.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "seaweedfs-ui.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "seaweedfs-ui.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end -}}
+{{- end -}}

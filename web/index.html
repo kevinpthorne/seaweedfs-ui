@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SeaweedFS Admin Console</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌊</text></svg>">
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-left">
+      <div class="brand">
+        <span class="brand-logo" aria-hidden="true">🌊</span>
+        <span class="brand-name">SeaweedFS</span>
+        <span class="brand-sub">Admin Console</span>
+        <span id="app-version" class="version-pill">v...</span>
+      </div>
+      <div class="cluster-controls">
+        <label for="cluster-select" class="visually-hidden">Select Cluster</label>
+        <select id="cluster-select" aria-label="Select Cluster">
+          <option value="" disabled selected>Loading clusters...</option>
+        </select>
+        <span id="cluster-source-badge" class="badge badge-source" style="display: none;"></span>
+        <span id="cluster-tls-badge" class="badge badge-tls" style="display: none;" title="mTLS Encrypted">🔒 mTLS</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <span id="admin-mode-badge" class="badge badge-readonly" title="Operation Mode">READ-ONLY</span>
+      <div class="refresh-controls">
+        <label for="refresh-interval-select" class="visually-hidden">Refresh Interval</label>
+        <select id="refresh-interval-select" title="Auto-Refresh Interval">
+          <option value="0">Refresh: Off</option>
+          <option value="5000">Refresh: 5s</option>
+          <option value="15000" selected>Refresh: 15s</option>
+          <option value="30000">Refresh: 30s</option>
+        </select>
+        <button id="manual-refresh-btn" class="btn btn-icon" title="Refresh Now" aria-label="Refresh Now">⟳</button>
+      </div>
+      <button id="theme-toggle-btn" class="btn btn-icon" title="Toggle Dark/Light Theme" aria-label="Toggle Dark/Light Theme">🌓</button>
+    </div>
+  </header>
+
+  <nav class="tabs-nav" aria-label="Primary Navigation">
+    <a href="#overview" class="tab-link active" data-tab="overview">Overview</a>
+    <a href="#topology" class="tab-link" data-tab="topology">Topology &amp; Volumes</a>
+    <a href="#filersync" class="tab-link" data-tab="filersync">Filer Sync</a>
+    <a href="#s3" class="tab-link" data-tab="s3">S3 Buckets &amp; IAM</a>
+    <a href="#filer" class="tab-link" data-tab="filer">Filer Browser</a>
+    <a href="#shell" class="tab-link" data-tab="shell">Shell Console</a>
+  </nav>
+
+  <main id="view-container" class="view-container" role="region" aria-live="polite">
+    <div class="view-loading">
+      <div class="spinner"></div>
+      <p>Loading view...</p>
+    </div>
+  </main>
+
+  <!-- Portals for Toasts, Modals, and Drawers -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+  <div id="modal-container" class="modal-container"></div>
+  <div id="drawer-container" class="drawer-container"></div>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,107 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/kevinpthorne/seaweedfs-ui
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automount: true
+  name: ""
+  annotations: {}
+
+rbac:
+  # Create Role/RoleBinding or ClusterRole/ClusterRoleBinding for Kubernetes auto-discovery
+  create: true
+  # true = ClusterRole + ClusterRoleBinding; false = namespace-scoped Role + RoleBinding
+  clusterWide: true
+
+config:
+  listenAddr: ":8080"
+  allowAdminActions: false
+  enableRawShell: false
+  queryTimeout: "15s"
+  actionTimeout: "120s"
+  weedBinaryPath: "/usr/local/bin/weed"
+
+  tls:
+    enabled: false
+    insecureSkipVerify: false
+    # Name of an existing Kubernetes Secret containing ca.crt, tls.crt, and tls.key
+    existingSecret: ""
+    # Optional separate Secret/ConfigMap containing ca.crt if not bundled in existingSecret
+    extraCaSecret: ""
+    caKey: "ca.crt"
+    certKey: "tls.crt"
+    keyKey: "tls.key"
+    securityTomlPath: "/tmp/seaweedfs/security.toml"
+
+  discovery:
+    kubernetes:
+      enabled: true
+      namespaces: []
+      refreshInterval: "30s"
+      serviceSelector: "app.kubernetes.io/name=seaweedfs"
+      filerSyncPodSelector: "app.kubernetes.io/component=filer-sync"
+
+  # Static cluster definitions (merged with K8s auto-discovery; static takes precedence on ID collision)
+  clusters: []
+  # Example:
+  # - id: "local-prod"
+  #   name: "Production SeaweedFS"
+  #   namespace: "seaweedfs"
+  #   masters:
+  #     - "seaweedfs-master-0.seaweedfs-master.seaweedfs.svc.cluster.local:9333"
+  #   filer: "seaweedfs-filer.seaweedfs.svc.cluster.local:8888"
+  #   s3: "seaweedfs-s3.seaweedfs.svc.cluster.local:8333"
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: seaweedfs-ui.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

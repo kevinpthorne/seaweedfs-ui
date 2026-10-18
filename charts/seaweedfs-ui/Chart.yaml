@@ -1,0 +1,15 @@
+apiVersion: v2
+name: seaweedfs-ui
+description: A lightweight, in-cluster Kubernetes Admin Web UI for SeaweedFS clusters with PKI/mTLS and filer.sync monitoring
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - seaweedfs
+  - storage
+  - s3
+  - filer
+  - admin-ui
+  - kubernetes
+maintainers:
+  - name: SeaweedFS UI Maintainers
