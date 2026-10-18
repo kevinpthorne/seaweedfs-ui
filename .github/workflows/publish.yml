@@ -101,12 +101,12 @@ jobs:
           SHORT_SHA="${{ steps.meta.outputs.short_sha }}"
 
           # Push per-architecture archives directly to GHCR via skopeo
-          nix run nixpkgs#skopeo -- copy --insecure-policy \
+          nix run .#skopeo -- copy --insecure-policy \
             --dest-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
             docker-archive:result-image-amd64 \
             "docker://${TARGET_IMAGE}:${VERSION}-amd64"
 
-          nix run nixpkgs#skopeo -- copy --insecure-policy \
+          nix run .#skopeo -- copy --insecure-policy \
             --dest-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
             docker-archive:result-image-arm64 \
             "docker://${TARGET_IMAGE}:${VERSION}-arm64"
@@ -146,8 +146,8 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           CHART_TGZ=$(ls result-chart/seaweedfs-ui-*.tgz | head -n1)
-          echo "${{ secrets.GITHUB_TOKEN }}" | nix run nixpkgs#kubernetes-helm -- registry login "${{ env.REGISTRY }}" \
+          echo "${{ secrets.GITHUB_TOKEN }}" | nix run .#helm -- registry login "${{ env.REGISTRY }}" \
             --username "${{ github.actor }}" \
             --password-stdin
-          nix run nixpkgs#kubernetes-helm -- push "${CHART_TGZ}" \
+          nix run .#helm -- push "${CHART_TGZ}" \
             "oci://${{ env.REGISTRY }}/${{ steps.meta.outputs.owner_lower }}/charts"

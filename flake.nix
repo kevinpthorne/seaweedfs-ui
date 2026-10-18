@@ -163,7 +163,12 @@
           then docker-image-arm64
           else docker-image-amd64;
 
-        # 3. Derivation 3: The packaged Helm chart (chained from executable + both amd64 & arm64 images)
+        # 3. Derivation 3: The packaged Helm chart
+        # Note: Do not place `.tar.gz` image archives in `buildInputs` because `stdenv/setup`
+        # attempts to `source` regular files found in `buildInputs` as setup hooks.
+        # Referencing `${seaweedfs-ui}`, `${docker-image-amd64}`, and `${docker-image-arm64}`
+        # directly in the build script and environment variables creates the exact Nix
+        # derivation dependency chain (`seaweedfs-ui` -> `docker-image-*` -> `helm-chart`).
         helm-chart = pkgs.stdenvNoCC.mkDerivation {
           pname = "seaweedfs-ui-helm-chart";
           inherit version;
@@ -172,28 +177,27 @@
 
           nativeBuildInputs = [ pkgs.kubernetes-helm ];
 
-          # Explicitly chain the executable and both multi-arch docker-image derivations
-          buildInputs = [
-            seaweedfs-ui
-            docker-image-amd64
-            docker-image-arm64
-          ];
-
           dontConfigure = true;
 
           buildPhase = ''
             runHook preBuild
 
+            test -x "${seaweedfs-ui}/bin/seaweedfs-ui"
             echo "Verified upstream executable: ${seaweedfs-ui}/bin/seaweedfs-ui"
-            echo "Verified upstream linux/amd64 image archive: ${docker-image-amd64}"
-            echo "Verified upstream linux/arm64 image archive: ${docker-image-arm64}"
+            ${lib.optionalString pkgs.stdenv.isLinux ''
+              test -s "${docker-image-amd64}"
+              test -s "${docker-image-arm64}"
+              echo "Verified upstream linux/amd64 image archive: ${docker-image-amd64}"
+              echo "Verified upstream linux/arm64 image archive: ${docker-image-arm64}"
+            ''}
 
-            mkdir -p build/seaweedfs-ui
-            cp -R ./* build/seaweedfs-ui/
-            chmod -R u+w build/seaweedfs-ui
+            CHART_BUILD_DIR="$TMPDIR/chart-build/seaweedfs-ui"
+            mkdir -p "$CHART_BUILD_DIR"
+            cp -R . "$CHART_BUILD_DIR/"
+            chmod -R u+w "$CHART_BUILD_DIR"
 
             # Ensure Chart.yaml version & appVersion match the Nix derivation version
-            substituteInPlace build/seaweedfs-ui/Chart.yaml \
+            substituteInPlace "$CHART_BUILD_DIR/Chart.yaml" \
               --replace-quiet 'version: 0.1.0' 'version: ${version}' \
               --replace-quiet 'appVersion: "0.1.0"' 'appVersion: "${version}"'
 
@@ -208,9 +212,10 @@
             export HELM_CONFIG_HOME="$TMPDIR/helm-config"
             export HELM_DATA_HOME="$TMPDIR/helm-data"
 
-            helm lint build/seaweedfs-ui
-            helm template test-release build/seaweedfs-ui --namespace seaweedfs > /dev/null
-            helm template test-release build/seaweedfs-ui --namespace seaweedfs \
+            CHART_BUILD_DIR="$TMPDIR/chart-build/seaweedfs-ui"
+            helm lint "$CHART_BUILD_DIR"
+            helm template test-release "$CHART_BUILD_DIR" --namespace seaweedfs > /dev/null
+            helm template test-release "$CHART_BUILD_DIR" --namespace seaweedfs \
               --set rbac.clusterWide=false \
               --set config.tls.enabled=true \
               --set config.tls.existingSecret=seaweedfs-client-tls \
@@ -222,16 +227,17 @@
           installPhase = ''
             runHook preInstall
 
-            mkdir -p $out
-            helm package build/seaweedfs-ui --destination $out --version ${version} --app-version ${version}
+            CHART_BUILD_DIR="$TMPDIR/chart-build/seaweedfs-ui"
+            mkdir -p "$out"
+            helm package "$CHART_BUILD_DIR" --destination "$out" --version "${version}" --app-version "${version}"
 
-            cat > $out/release-metadata.json <<EOF
+            cat > "$out/release-metadata.json" <<EOF
             {
               "version": "${version}",
               "gitCommit": "${gitCommit}",
               "executable": "${seaweedfs-ui}",
-              "dockerImageAmd64": "${docker-image-amd64}",
-              "dockerImageArm64": "${docker-image-arm64}",
+              "dockerImageAmd64": "${if pkgs.stdenv.isLinux then "${docker-image-amd64}" else "linux-only"}",
+              "dockerImageArm64": "${if pkgs.stdenv.isLinux then "${docker-image-arm64}" else "linux-only"}",
               "chartArchive": "seaweedfs-ui-${version}.tgz"
             }
             EOF
@@ -243,6 +249,8 @@
       {
         packages = {
           default = seaweedfs-ui;
+          helm = pkgs.kubernetes-helm;
+          skopeo = pkgs.skopeo;
           inherit
             seaweedfs-ui
             seaweedfs-ui-linux-amd64
