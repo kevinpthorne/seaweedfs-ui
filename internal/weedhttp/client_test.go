@@ -815,3 +815,72 @@ func TestMTLSConnection(t *testing.T) {
 		t.Errorf("expected mTLS connection to fail without client certificate")
 	}
 }
+
+func TestClient_Master415Failover(t *testing.T) {
+	netw := newTestNetwork()
+
+	// Master 1: simulates gRPC port mistakenly contacted via HTTP returning 415
+	_, cleanup1 := netw.NewServer("master-grpc:19333", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnsupportedMediaType)
+	}))
+	defer cleanup1()
+
+	// Master 2: healthy HTTP master
+	_, cleanup2 := netw.NewServer("master-http:9333", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"IsLeader":true,"Leader":"master-http:9333"}`)
+	}))
+	defer cleanup2()
+
+	client := NewClient(5 * time.Second)
+	client.SetDialContext(netw.DialContext)
+
+	target := cluster.ClusterTarget{
+		ID:      "test-415-cluster",
+		Masters: []string{"master-grpc:19333", "master-http:9333"},
+	}
+
+	status, err := client.GetClusterStatus(context.Background(), target)
+	if err != nil {
+		t.Fatalf("expected failover from 415 to healthy master, got error: %v", err)
+	}
+	if status.Leader != "master-http:9333" {
+		t.Errorf("expected leader master-http:9333, got %s", status.Leader)
+	}
+}
+
+func TestClient_MasterHTTPS_PlainHTTPFallback(t *testing.T) {
+	netw := newTestNetwork()
+
+	// Plain HTTP master server
+	_, cleanup := netw.NewServer("master-plain:9333", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS != nil {
+			t.Errorf("expected plain HTTP request, got TLS")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"IsLeader":true,"Leader":"master-plain:9333"}`)
+	}))
+	defer cleanup()
+
+	client := NewClient(5 * time.Second)
+	client.SetDialContext(netw.DialContext)
+
+	// Target has TLS.Enabled = true (e.g. because gRPC client certs are configured)
+	// but the master HTTP port is plain HTTP.
+	target := cluster.ClusterTarget{
+		ID:      "test-fallback-cluster",
+		Masters: []string{"master-plain:9333"},
+		TLS: config.TLSConfig{
+			Enabled:            true,
+			InsecureSkipVerify: true,
+		},
+	}
+
+	status, err := client.GetClusterStatus(context.Background(), target)
+	if err != nil {
+		t.Fatalf("expected fallback to plain HTTP, got error: %v", err)
+	}
+	if status.Leader != "master-plain:9333" {
+		t.Errorf("expected leader master-plain:9333, got %s", status.Leader)
+	}
+}

@@ -704,3 +704,88 @@ func TestCompositeRegistry_BackgroundRefreshLifecycle(t *testing.T) {
 
 	registry.Stop()
 }
+
+func TestK8sDiscovery_SkipsGRPCPorts(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/services") {
+			resp := map[string]interface{}{
+				"items": []map[string]interface{}{
+					{
+						"metadata": map[string]interface{}{
+							"name":      "seaweed-cluster-master",
+							"namespace": "seaweedfs-system",
+							"labels": map[string]string{
+								"app.kubernetes.io/name":     "seaweedfs",
+								"app.kubernetes.io/instance": "seaweed-cluster",
+							},
+						},
+						"spec": map[string]interface{}{
+							"clusterIP": "10.96.0.100",
+							"ports": []map[string]interface{}{
+								{"name": "master-http", "port": 9333},
+								{"name": "master-grpc", "port": 19333},
+							},
+						},
+					},
+					{
+						"metadata": map[string]interface{}{
+							"name":      "seaweed-cluster-filer",
+							"namespace": "seaweedfs-system",
+							"labels": map[string]string{
+								"app.kubernetes.io/name":     "seaweedfs",
+								"app.kubernetes.io/instance": "seaweed-cluster",
+							},
+						},
+						"spec": map[string]interface{}{
+							"clusterIP": "10.96.0.101",
+							"ports": []map[string]interface{}{
+								{"name": "filer-http", "port": 8888},
+								{"name": "filer-grpc", "port": 18888},
+							},
+						},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+		http.NotFound(w, r)
+	})
+
+	client, baseURL := newMockK8sClient(handler)
+	cfg := config.K8sDiscoveryConfig{
+		Enabled:     true,
+		ClusterWide: true,
+	}
+	provider := cluster.NewK8sDiscoveryProvider(
+		cfg,
+		config.TLSConfig{Enabled: false},
+		cluster.WithAPIBaseURL(baseURL),
+		cluster.WithHTTPClient(client),
+	)
+
+	clusters, err := provider.ListClusters(context.Background())
+	if err != nil {
+		t.Fatalf("ListClusters failed: %v", err)
+	}
+	if len(clusters) != 1 {
+		t.Fatalf("expected 1 cluster discovered, got %d", len(clusters))
+	}
+
+	c := clusters[0]
+	// Verify master port: only 9333, NOT 19333
+	if len(c.Masters) != 1 {
+		t.Fatalf("expected 1 master endpoint, got %d: %v", len(c.Masters), c.Masters)
+	}
+	expectedMaster := "seaweed-cluster-master.seaweedfs-system.svc.cluster.local:9333"
+	if c.Masters[0] != expectedMaster {
+		t.Errorf("expected master %q, got %q", expectedMaster, c.Masters[0])
+	}
+
+	// Verify filer port: only 8888, NOT 18888
+	expectedFiler := "seaweed-cluster-filer.seaweedfs-system.svc.cluster.local:8888"
+	if c.Filer != expectedFiler {
+		t.Errorf("expected filer %q, got %q", expectedFiler, c.Filer)
+	}
+}

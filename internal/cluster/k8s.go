@@ -191,6 +191,11 @@ func (p *K8sDiscoveryProvider) ListClusters(ctx context.Context) ([]ClusterTarge
 			portName := strings.ToLower(port.Name)
 			portNum := port.Port
 
+			// Skip internal gRPC ports for REST HTTP discovery
+			if strings.Contains(portName, "grpc") {
+				continue
+			}
+
 			// Master port: 9333 or name contains 'master'
 			if portNum == 9333 || strings.Contains(portName, "master") {
 				if svc.Spec.ClusterIP == "None" {
@@ -205,12 +210,17 @@ func (p *K8sDiscoveryProvider) ListClusters(ctx context.Context) ([]ClusterTarge
 
 			// Filer port: 8888 or name contains 'filer'
 			if portNum == 8888 || strings.Contains(portName, "filer") {
-				grp.filer = fmt.Sprintf("%s.%s.svc.cluster.local:%d", svc.Metadata.Name, ns, portNum)
+				// Prefer ClusterIP service over headless peer service
+				if grp.filer == "" || (!strings.Contains(svc.Metadata.Name, "-peer") && svc.Spec.ClusterIP != "None") {
+					grp.filer = fmt.Sprintf("%s.%s.svc.cluster.local:%d", svc.Metadata.Name, ns, portNum)
+				}
 			}
 
 			// S3 port: 8333 or name contains 's3'
 			if portNum == 8333 || strings.Contains(portName, "s3") {
-				grp.s3 = fmt.Sprintf("%s.%s.svc.cluster.local:%d", svc.Metadata.Name, ns, portNum)
+				if grp.s3 == "" || strings.Contains(svc.Metadata.Name, "-https") || (!strings.Contains(svc.Metadata.Name, "-peer") && svc.Spec.ClusterIP != "None") {
+					grp.s3 = fmt.Sprintf("%s.%s.svc.cluster.local:%d", svc.Metadata.Name, ns, portNum)
+				}
 			}
 		}
 	}
@@ -477,7 +487,7 @@ func (p *K8sDiscoveryProvider) get(ctx context.Context, path string, out interfa
 }
 
 func extractInstancePrefix(name string) string {
-	for _, suffix := range []string{"-master", "-filer", "-s3", "-volume"} {
+	for _, suffix := range []string{"-master-peer", "-filer-peer", "-volume-peer", "-master", "-filer", "-s3", "-volume"} {
 		if strings.HasSuffix(name, suffix) {
 			return strings.TrimSuffix(name, suffix)
 		}

@@ -13,3 +13,5 @@ keywords:
   - kubernetes
 maintainers:
   - name: SeaweedFS UI Maintainers
+annotations:
+  org.opencontainers.image.source: https://github.com/kevinpthorne/seaweedfs-ui

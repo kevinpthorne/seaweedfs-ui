@@ -145,6 +145,22 @@ func buildURL(tlsEnabled bool, addr, requestPath string) string {
 	return fmt.Sprintf("%s://%s%s", scheme, addr, requestPath)
 }
 
+func (c *DefaultClient) doWithHTTPFallback(ctx context.Context, httpClient *http.Client, tlsEnabled bool, makeReq func(useTLS bool) (*http.Request, error)) (*http.Response, error) {
+	req, err := makeReq(tlsEnabled)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil && tlsEnabled && (strings.Contains(err.Error(), "server gave HTTP response to HTTPS client") || strings.Contains(err.Error(), "first record does not look like a TLS handshake")) {
+		if plainReq, plainErr := makeReq(false); plainErr == nil {
+			if plainResp, plainDoErr := httpClient.Do(plainReq); plainDoErr == nil {
+				return plainResp, nil
+			}
+		}
+	}
+	return resp, err
+}
+
 // executeMasterRequest queries masters with candidate failover and 307 redirect tracking.
 func (c *DefaultClient) executeMasterRequest(ctx context.Context, target cluster.ClusterTarget, path string) (*http.Response, error) {
 	if len(target.Masters) == 0 {
@@ -178,15 +194,15 @@ func (c *DefaultClient) executeMasterRequest(ctx context.Context, target cluster
 
 	var errList []string
 	for _, masterAddr := range candidates {
-		fullURL := buildURL(target.TLS.Enabled, masterAddr, path)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
-		if err != nil {
-			errList = append(errList, fmt.Sprintf("%s: %v", masterAddr, err))
-			continue
-		}
-		req.Header.Set("Accept", "application/json")
-
-		resp, err := httpClient.Do(req)
+		resp, err := c.doWithHTTPFallback(ctx, httpClient, target.TLS.Enabled, func(useTLS bool) (*http.Request, error) {
+			fullURL := buildURL(useTLS, masterAddr, path)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Accept", "application/json")
+			return req, nil
+		})
 		if err != nil {
 			errList = append(errList, fmt.Sprintf("%s: %v", masterAddr, err))
 			continue
@@ -204,20 +220,30 @@ func (c *DefaultClient) executeMasterRequest(ctx context.Context, target cluster
 					c.mu.Unlock()
 
 					// Re-issue request against redirected leader
-					redirReq, err := http.NewRequestWithContext(ctx, http.MethodGet, loc, nil)
-					if err == nil {
-						redirReq.Header.Set("Accept", "application/json")
-						redirResp, redirErr := httpClient.Do(redirReq)
-						if redirErr == nil && redirResp.StatusCode < 500 {
-							return redirResp, nil
+					redirResp, redirErr := c.doWithHTTPFallback(ctx, httpClient, strings.HasPrefix(loc, "https://"), func(useTLS bool) (*http.Request, error) {
+						redirURL := loc
+						if !useTLS && strings.HasPrefix(loc, "https://") {
+							redirURL = "http://" + strings.TrimPrefix(loc, "https://")
 						}
+						req, err := http.NewRequestWithContext(ctx, http.MethodGet, redirURL, nil)
+						if err != nil {
+							return nil, err
+						}
+						req.Header.Set("Accept", "application/json")
+						return req, nil
+					})
+					if redirErr == nil && redirResp.StatusCode < 500 && redirResp.StatusCode != http.StatusUnsupportedMediaType {
+						return redirResp, nil
+					}
+					if redirResp != nil {
+						redirResp.Body.Close()
 					}
 				}
 			}
 			continue
 		}
 
-		if resp.StatusCode >= 500 {
+		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusUnsupportedMediaType {
 			resp.Body.Close()
 			errList = append(errList, fmt.Sprintf("%s: HTTP %d", masterAddr, resp.StatusCode))
 			continue
@@ -358,17 +384,17 @@ func (c *DefaultClient) ListFilerDir(ctx context.Context, target cluster.Cluster
 		cleanPath += "/"
 	}
 	queryPath := fmt.Sprintf("%s?pretty=y&limit=%d", cleanPath, limit)
-	fullURL := buildURL(target.TLS.Enabled, target.Filer, queryPath)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+	resp, err := c.doWithHTTPFallback(ctx, httpClient, target.TLS.Enabled, func(useTLS bool) (*http.Request, error) {
+		fullURL := buildURL(useTLS, target.Filer, queryPath)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
 	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("filer query %s: %w", fullURL, err)
+		return nil, fmt.Errorf("filer query: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -398,16 +424,12 @@ func (c *DefaultClient) StreamFile(ctx context.Context, target cluster.ClusterTa
 	}
 
 	cleanPath := path.Clean("/" + filePath)
-	fullURL := buildURL(target.TLS.Enabled, target.Filer, cleanPath)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+	resp, err := c.doWithHTTPFallback(ctx, httpClient, target.TLS.Enabled, func(useTLS bool) (*http.Request, error) {
+		fullURL := buildURL(useTLS, target.Filer, cleanPath)
+		return http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+	})
 	if err != nil {
-		return nil, "", err
-	}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, "", fmt.Errorf("download stream %s: %w", fullURL, err)
+		return nil, "", fmt.Errorf("download stream: %w", err)
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
@@ -504,16 +526,12 @@ func (c *DefaultClient) DeleteEntry(ctx context.Context, target cluster.ClusterT
 	if isDir {
 		deleteURL += "?recursive=true&ignoreRecursiveError=true"
 	}
-	fullURL := buildURL(target.TLS.Enabled, target.Filer, deleteURL)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, fullURL, nil)
+	resp, err := c.doWithHTTPFallback(ctx, httpClient, target.TLS.Enabled, func(useTLS bool) (*http.Request, error) {
+		fullURL := buildURL(useTLS, target.Filer, deleteURL)
+		return http.NewRequestWithContext(ctx, http.MethodDelete, fullURL, nil)
+	})
 	if err != nil {
-		return err
-	}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("delete entry %s: %w", fullURL, err)
+		return fmt.Errorf("delete entry: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -541,15 +559,11 @@ func (c *DefaultClient) CheckS3Status(ctx context.Context, target cluster.Cluste
 		return nil, err
 	}
 
-	fullURL := buildURL(target.TLS.Enabled, target.S3, "/")
 	start := time.Now()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := httpClient.Do(req)
+	resp, err := c.doWithHTTPFallback(ctx, httpClient, target.TLS.Enabled, func(useTLS bool) (*http.Request, error) {
+		fullURL := buildURL(useTLS, target.S3, "/")
+		return http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+	})
 	latency := time.Since(start).Milliseconds()
 
 	if err != nil {
@@ -581,18 +595,18 @@ func (c *DefaultClient) GetVolumeServerStatus(ctx context.Context, target cluste
 		return nil, err
 	}
 
-	fullURL := buildURL(target.TLS.Enabled, volumeServerAddr, "/status")
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+	resp, err := c.doWithHTTPFallback(ctx, httpClient, target.TLS.Enabled, func(useTLS bool) (*http.Request, error) {
+		fullURL := buildURL(useTLS, volumeServerAddr, "/status")
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("volume server probe: %w", err)
 	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("volume server probe %s: %w", fullURL, err)
-	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%w: HTTP %d", ErrBadResponse, resp.StatusCode)
