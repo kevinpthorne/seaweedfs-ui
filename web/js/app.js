@@ -27,6 +27,8 @@ const viewRenderers = {
   shell: renderShell
 };
 
+let viewRenderGeneration = 0;
+
 /**
  * Initializes and bootstraps the Single-Page Application.
  */
@@ -180,14 +182,39 @@ function handleRoute() {
 /**
  * Renders the currently selected view inside #view-container.
  */
-function renderCurrentView() {
+function renderCurrentView({ preserveScroll = false } = {}) {
   const container = document.getElementById('view-container');
   if (!container) return;
 
-  const renderer = viewRenderers[appState.currentTab];
-  if (typeof renderer === 'function') {
-    renderer(container, appState.selectedClusterId, appState);
+  const tabName = appState.currentTab;
+  const clusterId = appState.selectedClusterId;
+  const renderer = viewRenderers[tabName];
+  if (typeof renderer !== 'function') return;
+
+  const generation = ++viewRenderGeneration;
+  if (!preserveScroll) {
+    return renderer(container, clusterId, appState);
   }
+
+  const stagingContainer = document.createElement('div');
+  stagingContainer.className = 'view-refresh-stage';
+  return Promise.resolve()
+    .then(() => renderer(stagingContainer, clusterId, appState))
+    .then(() => {
+      if (generation !== viewRenderGeneration ||
+          appState.currentTab !== tabName ||
+          appState.selectedClusterId !== clusterId) {
+        return;
+      }
+
+      const scrollX = window.scrollX;
+      const scrollY = window.scrollY;
+      container.replaceChildren(stagingContainer);
+      window.scrollTo(scrollX, scrollY);
+    })
+    .catch((err) => {
+      console.error('Failed to refresh current view:', err);
+    });
 }
 
 /**
@@ -202,7 +229,7 @@ function setupAutoRefresh() {
   if (appState.refreshIntervalMs > 0) {
     appState.refreshTimerId = setInterval(() => {
       if (appState.isTabVisible) {
-        renderCurrentView();
+        renderCurrentView({ preserveScroll: true });
       }
     }, appState.refreshIntervalMs);
   }
@@ -245,7 +272,7 @@ function setupEventListeners() {
   const manualBtn = document.getElementById('manual-refresh-btn');
   if (manualBtn) {
     manualBtn.addEventListener('click', () => {
-      renderCurrentView();
+      renderCurrentView({ preserveScroll: true });
       showToast('Refreshed current view', 'info', 1500);
     });
   }
@@ -260,7 +287,7 @@ function setupEventListeners() {
   document.addEventListener('visibilitychange', () => {
     appState.isTabVisible = !document.hidden;
     if (appState.isTabVisible && appState.refreshIntervalMs > 0) {
-      renderCurrentView();
+      renderCurrentView({ preserveScroll: true });
     }
   });
 }

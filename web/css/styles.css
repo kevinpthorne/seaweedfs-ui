@@ -316,6 +316,10 @@ select:focus, input[type="text"]:focus, input[type="number"]:focus, textarea:foc
   margin: 0 auto;
 }
 
+.view-refresh-stage {
+  display: contents;
+}
+
 .view-loading {
   display: flex;
   flex-direction: column;
