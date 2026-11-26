@@ -65,6 +65,7 @@ type K8sDiscoveryProvider struct {
 	globalTLS   config.TLSConfig
 	apiBaseURL  string
 	token       string
+	tokenPath   string
 	httpClient  *http.Client
 	isK8sEnv    bool
 	inClusterNS string
@@ -104,6 +105,7 @@ func (p *K8sDiscoveryProvider) initInClusterConfig() {
 	}
 
 	p.token = strings.TrimSpace(string(tokenBytes))
+	p.tokenPath = defaultTokenPath
 	p.apiBaseURL = fmt.Sprintf("https://%s:%s", host, port)
 	p.isK8sEnv = true
 
@@ -463,8 +465,19 @@ func (p *K8sDiscoveryProvider) get(ctx context.Context, path string, out interfa
 		return fmt.Errorf("create k8s request: %w", err)
 	}
 
-	if p.token != "" {
-		req.Header.Set("Authorization", "Bearer "+p.token)
+	token := p.token
+	if p.tokenPath != "" {
+		tokenBytes, err := os.ReadFile(p.tokenPath)
+		if err != nil {
+			return fmt.Errorf("read kubernetes service account token: %w", err)
+		}
+		token = strings.TrimSpace(string(tokenBytes))
+		if token == "" {
+			return fmt.Errorf("kubernetes service account token file %q is empty", p.tokenPath)
+		}
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("Accept", "application/json")
 
