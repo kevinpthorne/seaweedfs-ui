@@ -2,6 +2,7 @@ package weedhttp
 
 import (
 	"encoding/json"
+	"fmt"
 	"path"
 	"sort"
 	"strconv"
@@ -91,6 +92,35 @@ func (r *VolumeStatusResponse) UnmarshalJSON(data []byte) error {
 		return json.Unmarshal(raw.Volumes, &r.Volumes)
 	}
 
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw.Volumes, &object); err != nil {
+		return err
+	}
+	if dataCenters, ok := object["DataCenters"]; ok {
+		var byDataCenter map[string]map[string]map[string][]VolumeDiskInfo
+		if err := json.Unmarshal(dataCenters, &byDataCenter); err != nil {
+			return err
+		}
+		byID := make(map[uint32]VolumeDiskInfo)
+		for _, racks := range byDataCenter {
+			for _, nodes := range racks {
+				for _, volumes := range nodes {
+					for _, volume := range volumes {
+						if _, exists := byID[volume.Id]; !exists {
+							byID[volume.Id] = volume
+						}
+					}
+				}
+			}
+		}
+		r.Volumes = make([]VolumeDiskInfo, 0, len(byID))
+		for _, volume := range byID {
+			r.Volumes = append(r.Volumes, volume)
+		}
+		sort.Slice(r.Volumes, func(i, j int) bool { return r.Volumes[i].Id < r.Volumes[j].Id })
+		return nil
+	}
+
 	var byID map[string]VolumeDiskInfo
 	if err := json.Unmarshal(raw.Volumes, &byID); err != nil {
 		return err
@@ -120,6 +150,89 @@ type VolumeDiskInfo struct {
 	DeleteCount      int64  `json:"DeleteCount"`
 	DeletedByteCount uint64 `json:"DeletedByteCount"`
 	ReadOnly         bool   `json:"ReadOnly"`
+}
+
+func (v *VolumeDiskInfo) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Id               uint32          `json:"Id"`
+		Size             uint64          `json:"Size"`
+		ReplicaPlacement json.RawMessage `json:"ReplicaPlacement"`
+		Ttl              json.RawMessage `json:"Ttl"`
+		Collection       string          `json:"Collection"`
+		Version          int             `json:"Version"`
+		FileCount        int64           `json:"FileCount"`
+		DeleteCount      int64           `json:"DeleteCount"`
+		DeletedByteCount uint64          `json:"DeletedByteCount"`
+		ReadOnly         bool            `json:"ReadOnly"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	*v = VolumeDiskInfo{
+		Id:               raw.Id,
+		Size:             raw.Size,
+		Collection:       raw.Collection,
+		Version:          raw.Version,
+		FileCount:        raw.FileCount,
+		DeleteCount:      raw.DeleteCount,
+		DeletedByteCount: raw.DeletedByteCount,
+		ReadOnly:         raw.ReadOnly,
+	}
+
+	replicaPlacement := strings.TrimSpace(string(raw.ReplicaPlacement))
+	if replicaPlacement != "" && replicaPlacement != "null" {
+		if strings.HasPrefix(replicaPlacement, "{") {
+			var placement struct {
+				Node int `json:"node"`
+				Rack int `json:"rack"`
+				DC   int `json:"dc"`
+			}
+			if err := json.Unmarshal(raw.ReplicaPlacement, &placement); err != nil {
+				return err
+			}
+			v.ReplicaPlacement = placement.DC*100 + placement.Rack*10 + placement.Node
+		} else if strings.HasPrefix(replicaPlacement, "\"") {
+			var placement string
+			if err := json.Unmarshal(raw.ReplicaPlacement, &placement); err != nil {
+				return err
+			}
+			value, err := strconv.Atoi(placement)
+			if err != nil {
+				return err
+			}
+			v.ReplicaPlacement = value
+		} else if err := json.Unmarshal(raw.ReplicaPlacement, &v.ReplicaPlacement); err != nil {
+			return err
+		}
+	}
+
+	ttl := strings.TrimSpace(string(raw.Ttl))
+	if ttl != "" && ttl != "null" {
+		if strings.HasPrefix(ttl, "\"") {
+			if err := json.Unmarshal(raw.Ttl, &v.Ttl); err != nil {
+				return err
+			}
+		} else if strings.HasPrefix(ttl, "{") {
+			var value struct {
+				Count uint8 `json:"Count"`
+				Unit  uint8 `json:"Unit"`
+			}
+			if err := json.Unmarshal(raw.Ttl, &value); err != nil {
+				return err
+			}
+			units := [...]byte{0, 'm', 'h', 'd', 'w', 'M', 'y'}
+			if value.Unit >= uint8(len(units)) {
+				return fmt.Errorf("invalid volume TTL unit %d", value.Unit)
+			}
+			if value.Unit > 0 {
+				v.Ttl = strconv.Itoa(int(value.Count)) + string(units[value.Unit])
+			}
+		} else if err := json.Unmarshal(raw.Ttl, &v.Ttl); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // VolumeInfo represents a normalized volume description used by UI tables.

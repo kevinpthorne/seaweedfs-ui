@@ -380,6 +380,71 @@ func TestGetVolumesObjectMapResponse(t *testing.T) {
 	}
 }
 
+func TestGetVolumesNestedTopologyResponse(t *testing.T) {
+	fixture := `{
+		"Version": "4.48",
+		"Volumes": {
+			"Max": 600,
+			"Free": 485,
+			"DataCenters": {
+				"DefaultDataCenter": {
+					"DefaultRack": {
+						"volume-0": [
+							{"Id": 1, "Size": 1000, "DeletedByteCount": 250, "FileCount": 4, "DeleteCount": 1, "ReplicaPlacement": {"node": 1, "rack": 0, "dc": 0}, "Ttl": {"Count": 0, "Unit": 0}, "Collection": "photos", "Version": 2, "ReadOnly": false},
+							{"Id": 2, "Size": 800, "ReplicaPlacement": {"node": 0, "rack": 1, "dc": 0}, "Ttl": {"Count": 2, "Unit": 3}, "Collection": "", "Version": 2, "ReadOnly": true}
+						]
+					},
+					"OtherRack": {
+						"volume-1": [
+							{"Id": 1, "Size": 1000, "DeletedByteCount": 250, "FileCount": 4, "DeleteCount": 1, "ReplicaPlacement": {"node": 1, "rack": 0, "dc": 0}, "Ttl": {"Count": 0, "Unit": 0}, "Collection": "photos", "Version": 2, "ReadOnly": false}
+						]
+					}
+				}
+			}
+		}
+	}`
+
+	netw := newTestNetwork()
+	_, cleanup := netw.NewServer("master1:9333", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/vol/status" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, fixture)
+	}))
+	defer cleanup()
+
+	client := NewClient(5 * time.Second)
+	client.SetDialContext(netw.DialContext)
+	status, err := client.GetVolumeStatus(context.Background(), cluster.ClusterTarget{
+		ID:      "test-cluster",
+		Masters: []string{"master1:9333"},
+	})
+	if err != nil {
+		t.Fatalf("GetVolumeStatus failed: %v", err)
+	}
+	if len(status.Volumes) != 2 || status.Volumes[1].Ttl != "2d" {
+		t.Fatalf("unexpected parsed volume status: %+v", status.Volumes)
+	}
+
+	volumes, err := client.GetVolumes(context.Background(), cluster.ClusterTarget{
+		ID:      "test-cluster",
+		Masters: []string{"master1:9333"},
+	})
+	if err != nil {
+		t.Fatalf("GetVolumes failed: %v", err)
+	}
+	if len(volumes) != 2 {
+		t.Fatalf("expected 2 unique volumes, got %d: %+v", len(volumes), volumes)
+	}
+	if volumes[0].ID != 1 || volumes[0].ReplicaPlacement != "001" || volumes[0].GarbageRatio != 0.25 {
+		t.Errorf("unexpected first volume: %+v", volumes[0])
+	}
+	if volumes[1].ID != 2 || volumes[1].ReplicaPlacement != "010" || !volumes[1].ReadOnly {
+		t.Errorf("unexpected second volume: %+v", volumes[1])
+	}
+}
+
 
 func TestMultiMasterFailover_307Redirect(t *testing.T) {
 	netw := newTestNetwork()
