@@ -76,6 +76,8 @@ flowchart TB
 5. **Filer Browser**: Directory breadcrumb explorer with file sizes, chunk counts, MIME types, file download/upload/delete support, and an inode metadata drawer (`fs.meta.cat`).
 6. **Weed Shell Console**: Curated read-only command presets (`cluster.status`, `volume.list`, `s3.bucket.list`, `s3.configure`, `ec.shard.list`, `fs.ls /`), execution duration timer, and an optional raw command console (`enableRawShell: true`).
 
+Automatic and manual view refreshes preserve the current scroll position while updated data loads.
+
 ---
 
 ## Quick Start
