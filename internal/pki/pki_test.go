@@ -710,6 +710,9 @@ func TestEnsureSecurityToml_Disabled(t *testing.T) {
 func TestEnsureSecurityToml_CustomPath(t *testing.T) {
 	tempDir := t.TempDir()
 	customPath := filepath.Join(tempDir, "custom", "security.toml")
+	tempHome := filepath.Join(tempDir, "home")
+	t.Setenv("HOME", tempHome)
+
 
 	cfg := config.TLSConfig{
 		Enabled:          true,
@@ -731,6 +734,14 @@ func TestEnsureSecurityToml_CustomPath(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0600 {
 		t.Errorf("expected mode 0600, got: %o", info.Mode().Perm())
+	}
+	canonicalPath := filepath.Join(tempHome, ".seaweedfs", "security.toml")
+	canonicalInfo, err := os.Stat(canonicalPath)
+	if err != nil {
+		t.Fatalf("stat canonical file: %v", err)
+	}
+	if canonicalInfo.Mode().Perm() != 0600 {
+		t.Errorf("expected canonical file mode 0600, got: %o", canonicalInfo.Mode().Perm())
 	}
 }
 

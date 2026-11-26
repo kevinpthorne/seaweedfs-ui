@@ -18,19 +18,14 @@ func EnsureSecurityToml(cfg config.TLSConfig) (string, error) {
 		return "", nil
 	}
 
-	// Determine destination path and base directory
-	var targetPath string
-	var homeDir string
-
-	if cfg.SecurityTomlPath != "" {
-		targetPath = cfg.SecurityTomlPath
-		homeDir = filepath.Dir(targetPath)
-	} else {
-		homeDir = os.Getenv("HOME")
-		if homeDir == "" {
-			homeDir = "/tmp/seaweedfs"
-		}
-		targetPath = filepath.Join(homeDir, ".seaweedfs", "security.toml")
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		homeDir = "/tmp/seaweedfs"
+	}
+	canonicalPath := filepath.Join(homeDir, ".seaweedfs", "security.toml")
+	targetPath := cfg.SecurityTomlPath
+	if targetPath == "" {
+		targetPath = canonicalPath
 	}
 
 	targetDir := filepath.Dir(targetPath)
@@ -85,8 +80,19 @@ func EnsureSecurityToml(cfg config.TLSConfig) (string, error) {
 		}
 	}
 
-	// Also write secondary path ($HOME/security.toml) for direct weed shell lookup
-	if homeDir != "" && strings.HasSuffix(targetPath, filepath.Join(".seaweedfs", "security.toml")) {
+	// weed shell reads this path from HOME even when a custom output path is configured.
+	if targetPath != canonicalPath {
+		canonicalDir := filepath.Dir(canonicalPath)
+		if err := os.MkdirAll(canonicalDir, 0700); err != nil {
+			return "", fmt.Errorf("create directory %q: %w", canonicalDir, err)
+		}
+		if err := os.WriteFile(canonicalPath, content, 0600); err != nil {
+			return "", fmt.Errorf("write security.toml %q: %w", canonicalPath, err)
+		}
+	}
+
+	// Also write secondary path ($HOME/security.toml) for direct weed shell lookup.
+	if targetPath == canonicalPath {
 		secondaryPath := filepath.Join(homeDir, "security.toml")
 		_ = os.WriteFile(secondaryPath, content, 0600)
 	}
