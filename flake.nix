@@ -60,7 +60,7 @@
         };
 
         # 1b. Cross/target Linux static Go executable builder for amd64 & arm64
-        mkLinuxExecutable = goArch: pkgs.buildGoModule {
+        mkLinuxExecutable = { goArch, goPkgs }: goPkgs.buildGoModule {
           pname = "seaweedfs-ui-linux-${goArch}";
           inherit version;
           src = cleanedSrc;
@@ -68,26 +68,36 @@
           subPackages = [ "cmd/seaweedfs-ui" ];
           env = {
             CGO_ENABLED = 0;
-            GOOS = "linux";
-            GOARCH = goArch;
           };
           ldflags = commonLdflags;
           # Unit tests already run in the native `seaweedfs-ui` derivation
           doCheck = false;
 
           postInstall = ''
-            # When cross-compiling, `go install` outputs to $out/bin/linux_${goArch}/seaweedfs-ui
+            # Go's Nix wrapper targets its toolchain's host platform; choose a
+            # cross package set above instead of trying to override GOARCH.
             if [ -f "$out/bin/linux_${goArch}/seaweedfs-ui" ]; then
               mv "$out/bin/linux_${goArch}/seaweedfs-ui" "$out/bin/seaweedfs-ui"
               rmdir "$out/bin/linux_${goArch}"
             fi
-            mkdir -p $out/usr/local/bin
-            ln -s $out/bin/seaweedfs-ui $out/usr/local/bin/seaweedfs-ui
+            machine=$(od -An -t u2 -j 18 -N 2 "$out/bin/seaweedfs-ui" | tr -d '[:space:]')
+            case "${goArch}:$machine" in
+              amd64:62|arm64:183) ;;
+              *) echo "unexpected ELF machine for ${goArch}: $machine" >&2; exit 1 ;;
+            esac
+            mkdir -p "$out/usr/local/bin"
+            ln -s "$out/bin/seaweedfs-ui" "$out/usr/local/bin/seaweedfs-ui"
           '';
         };
 
-        seaweedfs-ui-linux-amd64 = mkLinuxExecutable "amd64";
-        seaweedfs-ui-linux-arm64 = mkLinuxExecutable "arm64";
+        seaweedfs-ui-linux-amd64 = mkLinuxExecutable {
+          goArch = "amd64";
+          goPkgs = pkgs.pkgsCross.gnu64;
+        };
+        seaweedfs-ui-linux-arm64 = mkLinuxExecutable {
+          goArch = "arm64";
+          goPkgs = pkgs.pkgsCross.aarch64-multiplatform;
+        };
 
         # 2. Multi-arch OCI/Docker layered image builder (amd64 and arm64)
         mkDockerImage = { goArch, nixSystem, appBin }:
