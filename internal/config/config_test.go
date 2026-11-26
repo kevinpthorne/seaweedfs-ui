@@ -33,6 +33,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.TLS.Enabled != false {
 		t.Errorf("expected default TLS.Enabled false, got true")
 	}
+	if cfg.TLS.SecurityTomlPath != "/tmp/seaweedfs/.seaweedfs/security.toml" {
+		t.Errorf("expected default SecurityTomlPath under HOME/.seaweedfs, got %q", cfg.TLS.SecurityTomlPath)
+	}
 	if cfg.Discovery.Kubernetes.Enabled != true {
 		t.Errorf("expected default K8s discovery enabled true, got false")
 	}

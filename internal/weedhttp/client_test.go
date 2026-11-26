@@ -341,6 +341,46 @@ func TestGetVolumeStatus(t *testing.T) {
 	}
 }
 
+func TestGetVolumesObjectMapResponse(t *testing.T) {
+	fixture := `{
+		"Version": "4.33",
+		"Volumes": {
+			"2": {"Size": 500, "FileCount": 4},
+			"1": {"Id": 1, "Size": 1000, "DeletedByteCount": 250}
+		}
+	}`
+
+	netw := newTestNetwork()
+	_, cleanup := netw.NewServer("master1:9333", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/vol/status" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, fixture)
+	}))
+	defer cleanup()
+
+	client := NewClient(5 * time.Second)
+	client.SetDialContext(netw.DialContext)
+	volumes, err := client.GetVolumes(context.Background(), cluster.ClusterTarget{
+		ID:      "test-cluster",
+		Masters: []string{"master1:9333"},
+	})
+	if err != nil {
+		t.Fatalf("GetVolumes failed: %v", err)
+	}
+	if len(volumes) != 2 {
+		t.Fatalf("expected 2 volumes, got %d", len(volumes))
+	}
+	if volumes[0].ID != 1 || volumes[0].GarbageRatio != 0.25 {
+		t.Errorf("unexpected first volume: %+v", volumes[0])
+	}
+	if volumes[1].ID != 2 {
+		t.Errorf("object key was not used as volume ID: %+v", volumes[1])
+	}
+}
+
+
 func TestMultiMasterFailover_307Redirect(t *testing.T) {
 	netw := newTestNetwork()
 

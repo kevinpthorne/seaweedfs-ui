@@ -39,7 +39,7 @@ config:
     caKey: "ca.crt"
     certKey: "tls.crt"
     keyKey: "tls.key"
-    securityTomlPath: "/tmp/seaweedfs/security.toml"
+    securityTomlPath: "/tmp/seaweedfs/.seaweedfs/security.toml"
 
   discovery:
     kubernetes:

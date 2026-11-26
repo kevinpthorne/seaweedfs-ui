@@ -19,7 +19,7 @@ data:
       caFile: {{ printf "/etc/seaweedfs-ui/tls/%s" (default "ca.crt" .Values.config.tls.caKey) | quote }}
       certFile: {{ printf "/etc/seaweedfs-ui/tls/%s" (default "tls.crt" .Values.config.tls.certKey) | quote }}
       keyFile: {{ printf "/etc/seaweedfs-ui/tls/%s" (default "tls.key" .Values.config.tls.keyKey) | quote }}
-      securityTomlPath: {{ default "/tmp/seaweedfs/security.toml" .Values.config.tls.securityTomlPath | quote }}
+      securityTomlPath: {{ default "/tmp/seaweedfs/.seaweedfs/security.toml" .Values.config.tls.securityTomlPath | quote }}
     discovery:
       kubernetes:
         enabled: {{ .Values.config.discovery.kubernetes.enabled }}

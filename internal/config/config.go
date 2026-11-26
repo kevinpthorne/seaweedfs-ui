@@ -109,7 +109,7 @@ func DefaultConfig() *Config {
 			CAFile:             "/etc/seaweedfs-ui/tls/ca.crt",
 			CertFile:           "/etc/seaweedfs-ui/tls/tls.crt",
 			KeyFile:            "/etc/seaweedfs-ui/tls/tls.key",
-			SecurityTomlPath:   "/tmp/seaweedfs/security.toml",
+			SecurityTomlPath:   "/tmp/seaweedfs/.seaweedfs/security.toml",
 		},
 		Discovery: DiscoveryConfig{
 			Kubernetes: K8sDiscoveryConfig{

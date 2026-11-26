@@ -1,7 +1,10 @@
 package weedhttp
 
 import (
+	"encoding/json"
 	"path"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -68,6 +71,41 @@ type DirVolumeLayout struct {
 type VolumeStatusResponse struct {
 	Version string           `json:"Version"`
 	Volumes []VolumeDiskInfo `json:"Volumes"`
+}
+
+func (r *VolumeStatusResponse) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Version string          `json:"Version"`
+		Volumes json.RawMessage `json:"Volumes"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	r.Version = raw.Version
+	if len(raw.Volumes) == 0 || string(raw.Volumes) == "null" {
+		r.Volumes = nil
+		return nil
+	}
+	if raw.Volumes[0] == '[' {
+		return json.Unmarshal(raw.Volumes, &r.Volumes)
+	}
+
+	var byID map[string]VolumeDiskInfo
+	if err := json.Unmarshal(raw.Volumes, &byID); err != nil {
+		return err
+	}
+	r.Volumes = make([]VolumeDiskInfo, 0, len(byID))
+	for key, volume := range byID {
+		if volume.Id == 0 {
+			if id, err := strconv.ParseUint(key, 10, 32); err == nil {
+				volume.Id = uint32(id)
+			}
+		}
+		r.Volumes = append(r.Volumes, volume)
+	}
+	sort.Slice(r.Volumes, func(i, j int) bool { return r.Volumes[i].Id < r.Volumes[j].Id })
+	return nil
 }
 
 // VolumeDiskInfo models per-volume disk usage and statistics.
